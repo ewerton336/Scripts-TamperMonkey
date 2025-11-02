@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         OLX: Clicar no Chat do Anúncio (preciso)
+// @name         OLX: Clicar no Chat do Anúncio (preciso) + Foco/Aba Ativa
 // @namespace    pequeno-gafanhoto
-// @version      1.4
-// @description  Espera pelo botão correto do anúncio (#price-box-button-chat) e clica; evita o Chat do header.
+// @version      1.5
+// @description  Espera pelo botão correto do anúncio (#price-box-button-chat) e clica; evita o Chat do header. Re-tenta ao ativar a aba.
 // @match        https://*.olx.com.br/*
 // @match        https://olx.com.br/*
 // @run-at       document-start
@@ -43,13 +43,21 @@
     inputObserver,
     inputPollInterval,
     messageObserver;
+
   let chatButtonClicked = false;
   let lastOfferValue = null;
+
+  // === NOVO: controle de varreduras por foco/visibilidade ===
+  let sweepTimeout = null;
+  let lastSweepAt = 0;
+  const SWEEP_DEBOUNCE_MS = 120; // evita múltiplos sweeps colados
+  const WATCHDOG_DELAY_MS = 4000; // watchdog para re-tentar se nada clicou
+  let watchdogTimeout = null;
 
   const STORAGE_KEY = "olx-last-offer-value";
   const log = (...a) => console.log("[TM-OLX-Chat-Preciso]", ...a);
 
-  // Expõe funções globais para debug
+  // Expor debug
   window.OLX_DEBUG = {
     getStoredValue: () => localStorage.getItem(STORAGE_KEY),
     setStoredValue: (val) => localStorage.setItem(STORAGE_KEY, val),
@@ -59,7 +67,9 @@
       log(`Valor salvo: ${localStorage.getItem(STORAGE_KEY)}`);
       log(`Chat clicado: ${chatButtonClicked}`);
       log(`URL: ${window.location.href}`);
+      log(`Última varredura: ${new Date(lastSweepAt).toLocaleTimeString()}`);
     },
+    forceSweep: () => scheduleQuickSweep("manual"),
   };
 
   function isVisible(el) {
@@ -95,12 +105,10 @@
       document.querySelectorAll(FALLBACK_SELECTORS)
     ).filter((el) => isVisible(el) && isEnabled(el));
 
-    // se houver muitos, dá preferência aos que estão na área principal/price box
     candidates.sort((a, b) => {
       const aMain = isInPreferredArea(a) ? 1 : 0;
       const bMain = isInPreferredArea(b) ? 1 : 0;
-      if (aMain !== bMain) return bMain - aMain; // preferir quem está em área preferida
-      // como desempate, quem estiver mais próximo do centro vertical da viewport
+      if (aMain !== bMain) return bMain - aMain;
       const ay = a.getBoundingClientRect().top;
       const by = b.getBoundingClientRect().top;
       const cy = window.innerHeight / 2;
@@ -116,7 +124,6 @@
     if (!btn || clicked.has(btn)) return false;
     clicked.add(btn);
     try {
-      // Garante estar visível na tela
       btn.scrollIntoView({
         block: "center",
         inline: "center",
@@ -124,7 +131,6 @@
       });
     } catch {}
     try {
-      // Dispara sequência de eventos para simular interação real
       ["mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
         btn.dispatchEvent(
           new MouseEvent(type, {
@@ -136,22 +142,14 @@
       );
       log("Clique disparado no botão do anúncio:", btn);
       chatButtonClicked = true;
-      // Após clicar no chat, inicia observação do botão "Fazer oferta"
-      setTimeout(() => {
-        startOfferObserver();
-        startOfferPolling();
-      }, 500);
+      afterChatClicked();
       return true;
     } catch {
       try {
         btn.click();
         log("Clique via .click():", btn);
         chatButtonClicked = true;
-        // Após clicar no chat, inicia observação do botão "Fazer oferta"
-        setTimeout(() => {
-          startOfferObserver();
-          startOfferPolling();
-        }, 500);
+        afterChatClicked();
         return true;
       } catch (e) {
         console.warn("[TM-OLX-Chat-Preciso] Falha ao clicar", e);
@@ -160,11 +158,21 @@
     }
   }
 
+  function afterChatClicked() {
+    // Para watchdog de abertura de chat
+    clearWatchdog("chat open");
+    // Após clicar no chat, inicia observação do botão "Fazer oferta"
+    setTimeout(() => {
+      startOfferObserver();
+      startOfferPolling();
+    }, 500);
+  }
+
   function tryClick() {
     const btn = pickButton();
     if (!btn) return false;
 
-    // Segurança extra: não clicar em elementos que sejam header/topbar
+    // Segurança extra: não clicar em header/topbar
     const isHeader = !!btn.closest(
       'header, nav, [class*="header"], [class*="topbar"], [id*="header"]'
     );
@@ -189,35 +197,33 @@
     pollId = setInterval(tryClick, 600);
   }
 
-  // === Funções para clicar no botão "Fazer oferta" ===
+  function stopPolling() {
+    if (pollId) {
+      clearInterval(pollId);
+      pollId = null;
+    }
+  }
+
+  // === "Fazer oferta" ===
 
   function findOfferButton() {
-    // Busca botão com texto "Fazer oferta" e classes específicas
     const buttons = Array.from(
       document.querySelectorAll(
         "button.olx-core-button.olx-core-button--secondary.olx-core-button--small"
       )
     );
-
     for (const btn of buttons) {
-      // Verifica se contém o texto "Fazer oferta"
-      if (btn.textContent.trim().includes("Fazer oferta")) {
-        return btn;
-      }
+      if (btn.textContent.trim().includes("Fazer oferta")) return btn;
     }
-
-    // Fallback: busca por qualquer botão com texto "Fazer oferta"
     const allButtons = Array.from(document.querySelectorAll("button"));
     for (const btn of allButtons) {
       if (
         btn.textContent.trim().includes("Fazer oferta") &&
         isVisible(btn) &&
         isEnabled(btn)
-      ) {
+      )
         return btn;
-      }
     }
-
     return null;
   }
 
@@ -225,30 +231,16 @@
     if (!btn || offerClicked.has(btn)) return false;
     offerClicked.add(btn);
     try {
-      btn.scrollIntoView({
-        block: "center",
-        inline: "center",
-        behavior: "instant",
-      });
+      btn.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     } catch {}
     try {
       ["mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
-        btn.dispatchEvent(
-          new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-          })
-        )
+        btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
       );
       log('Clique disparado no botão "Fazer oferta":', btn);
-      // Para de observar e polling após clicar
       stopOfferObserver();
       stopOfferPolling();
-      // Aguarda o formulário de oferta aparecer e configura monitoramento
-      setTimeout(() => {
-        startInputObserver();
-      }, 500);
+      setTimeout(() => startInputObserver(), 500);
       return true;
     } catch {
       try {
@@ -256,16 +248,10 @@
         log('Clique via .click() no botão "Fazer oferta":', btn);
         stopOfferObserver();
         stopOfferPolling();
-        // Aguarda o formulário de oferta aparecer e configura monitoramento
-        setTimeout(() => {
-          startInputObserver();
-        }, 500);
+        setTimeout(() => startInputObserver(), 500);
         return true;
       } catch (e) {
-        console.warn(
-          '[TM-OLX-Chat-Preciso] Falha ao clicar em "Fazer oferta"',
-          e
-        );
+        console.warn('[TM-OLX-Chat-Preciso] Falha ao clicar em "Fazer oferta"', e);
         return false;
       }
     }
@@ -283,10 +269,7 @@
     chatObserver = new MutationObserver(() => {
       tryClickOffer();
     });
-    chatObserver.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
+    chatObserver.observe(document.documentElement, { childList: true, subtree: true });
     log("Observador do botão 'Fazer oferta' iniciado");
   }
 
@@ -312,12 +295,9 @@
     }
   }
 
-  // === Fim das funções "Fazer oferta" ===
-
-  // === Funções para salvar/restaurar valor do input de oferta ===
+  // === Salvar/restaurar valor do input de oferta ===
 
   function findOfferInput() {
-    // Busca o input com as classes específicas
     const selectors = [
       'input.olx-core-input-textarea-element[aria-label="Sua oferta"]',
       'input.olx-core-input-textarea-element[placeholder*="R$"]',
@@ -325,7 +305,6 @@
       'input[placeholder*="R$"]',
       "input.olx-core-input-textarea-element",
     ];
-
     for (const selector of selectors) {
       const inputs = Array.from(document.querySelectorAll(selector));
       for (const input of inputs) {
@@ -335,13 +314,11 @@
         }
       }
     }
-
     return null;
   }
 
   function saveOfferValue(value) {
     try {
-      // Remove formatação para salvar apenas números
       const cleanValue = value.replace(/[^\d]/g, "");
       if (cleanValue && cleanValue !== "0" && cleanValue !== "00") {
         localStorage.setItem(STORAGE_KEY, value);
@@ -370,29 +347,16 @@
   function restoreOfferValue(input) {
     const savedValue = loadOfferValue();
     if (!savedValue || !input) return false;
-
     try {
-      // Foca no input primeiro
       input.focus();
-
-      // Define o valor
       const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
         window.HTMLInputElement.prototype,
         "value"
       ).set;
       nativeInputValueSetter.call(input, savedValue);
-
-      // Dispara eventos para o framework detectar a mudança
-      input.dispatchEvent(
-        new Event("input", { bubbles: true, cancelable: true })
-      );
-      input.dispatchEvent(
-        new Event("change", { bubbles: true, cancelable: true })
-      );
-
-      // Remove foco
+      input.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
       input.blur();
-
       log(`Valor restaurado no input: ${savedValue}`);
       return true;
     } catch (e) {
@@ -407,34 +371,28 @@
       log("Input de oferta não encontrado ainda");
       return false;
     }
-
-    // Marca como monitorado para evitar duplicação
     if (input.hasAttribute("data-olx-monitored")) {
       log("Input já está sendo monitorado");
       return true;
     }
     input.setAttribute("data-olx-monitored", "true");
-
     log("Input de oferta encontrado, configurando...");
 
-    // Aguarda um pouco antes de restaurar (para garantir que o campo está pronto)
     setTimeout(() => {
       restoreOfferValue(input);
     }, 300);
 
-    // Monitora mudanças no input para salvar E capturar valor
     const saveOnChange = (e) => {
       const value = e.target.value;
       log(`Valor alterado detectado: ${value}`);
       if (value && value !== "R$ 0,00" && value.trim() !== "") {
         saveOfferValue(value);
-        lastOfferValue = value; // Captura para usar na mensagem
+        lastOfferValue = value;
       }
     };
 
     input.addEventListener("change", saveOnChange);
     input.addEventListener("blur", saveOnChange);
-    // Também salva ao digitar (com debounce via timeout)
     let saveTimeout;
     input.addEventListener("input", (e) => {
       clearTimeout(saveTimeout);
@@ -442,16 +400,13 @@
         const value = e.target.value;
         if (value && value !== "R$ 0,00" && value.trim() !== "") {
           saveOfferValue(value);
-          lastOfferValue = value; // Captura para usar na mensagem
+          lastOfferValue = value;
         }
-      }, 1000); // Salva 1 segundo após parar de digitar
+      }, 1000);
     });
 
     log("Monitoramento do input de oferta configurado");
-
-    // Inicia monitoramento do botão "Enviar oferta"
     startSendOfferObserver();
-
     return true;
   }
 
@@ -466,21 +421,17 @@
       log("Observer de input já está ativo");
       return;
     }
-
     let attempts = 0;
-    const maxAttempts = 20; // Tenta por 20 vezes (8 segundos)
+    const maxAttempts = 20;
 
-    // Tenta imediatamente
     if (trySetupInput()) {
       log("Input encontrado e configurado imediatamente!");
-      return; // Não precisa continuar se já encontrou
+      return;
     }
 
-    // Polling para tentar encontrar o input
     inputPollInterval = setInterval(() => {
       attempts++;
       log(`Tentativa ${attempts} de encontrar input de oferta...`);
-
       if (trySetupInput()) {
         clearInterval(inputPollInterval);
         inputPollInterval = null;
@@ -492,12 +443,10 @@
       }
     }, 400);
 
-    // Observer como backup
     inputObserver = new MutationObserver(() => {
       const input = findOfferInput();
       if (input && !input.hasAttribute("data-olx-monitored")) {
         setupInputMonitoring();
-        // Se encontrou via observer, para o polling
         if (inputPollInterval) {
           clearInterval(inputPollInterval);
           inputPollInterval = null;
@@ -505,16 +454,11 @@
         }
       }
     });
-    inputObserver.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
+    inputObserver.observe(document.documentElement, { childList: true, subtree: true });
     log("Observador do input de oferta iniciado");
   }
 
-  // === Fim das funções de input ===
-
-  // === Funções para detectar "Enviar oferta" e preencher mensagem ===
+  // === Detectar "Enviar oferta" e preencher mensagem ===
 
   function findSendOfferButton() {
     const buttons = Array.from(
@@ -522,25 +466,18 @@
         "button.olx-core-button.olx-core-button--primary.olx-core-button--medium"
       )
     );
-
     for (const btn of buttons) {
-      if (btn.textContent.trim().includes("Enviar oferta")) {
-        return btn;
-      }
+      if (btn.textContent.trim().includes("Enviar oferta")) return btn;
     }
-
-    // Fallback
     const allButtons = Array.from(document.querySelectorAll("button"));
     for (const btn of allButtons) {
       if (
         btn.textContent.trim().includes("Enviar oferta") &&
         isVisible(btn) &&
         isEnabled(btn)
-      ) {
+      )
         return btn;
-      }
     }
-
     return null;
   }
 
@@ -551,7 +488,6 @@
       'textarea[placeholder*="Digite uma mensagem"]',
       "textarea.olx-core-textarea-element",
     ];
-
     for (const selector of selectors) {
       const textareas = Array.from(document.querySelectorAll(selector));
       for (const textarea of textareas) {
@@ -561,20 +497,15 @@
         }
       }
     }
-
     return null;
   }
 
   function findSendMessageButton() {
-    // Busca pelo botão que contém o SVG path específico
-    const paths = Array.from(
-      document.querySelectorAll('path[fill-rule="evenodd"]')
-    );
-
+    // 1) via path do SVG conhecido
+    const paths = Array.from(document.querySelectorAll('path[fill-rule="evenodd"]'));
     for (const path of paths) {
       const d = path.getAttribute("d");
       if (d && d.includes("M2.04229758,14.0134155")) {
-        // Encontrou o path, agora busca o botão pai
         const button = path.closest("button");
         if (button && isVisible(button) && isEnabled(button)) {
           log("Botão de enviar mensagem encontrado via SVG path");
@@ -582,8 +513,7 @@
         }
       }
     }
-
-    // Fallback: busca botões próximos ao textarea
+    // 2) fallback por proximidade ao textarea
     const textarea = findMessageTextarea();
     if (textarea) {
       const container = textarea.closest("form, div");
@@ -598,41 +528,28 @@
         }
       }
     }
-
     return null;
   }
 
   function fillMessage(textarea, offerValue) {
     if (!textarea) return false;
 
-    const message = `Olá, tudo bem? acabei de mandar oferta no seu produto no valor de ${offerValue}. É um pouco abaixo do que você está pedindo, mas tenho real interesse. Se você aceitar, estarei pagando imediatamente para concretizarmos a compra. Caso não esteja de acordo tudo bem, lhe desejo boas vendas!`;
+    const message = `Olá, tudo bem? Acabei de enviar uma oferta no valor de ${offerValue}. Sei que é um pouco abaixo do que você está pedindo, mas tenho real interesse na compra. Trabalho com revenda local aqui na minha cidade e pretendo adquirir o produto para revenda. Caso aceite, realizo o pagamento imediatamente para concretizarmos o negócio. Se não for possível, tudo bem, desejo ótimas vendas!`;
 
     try {
       textarea.focus();
-
-      // Define o valor
-      const nativeTextareaSetter = Object.getOwnPropertyDescriptor(
+      const setter = Object.getOwnPropertyDescriptor(
         window.HTMLTextAreaElement.prototype,
         "value"
       ).set;
-      nativeTextareaSetter.call(textarea, message);
-
-      // Dispara eventos
-      textarea.dispatchEvent(
-        new Event("input", { bubbles: true, cancelable: true })
-      );
-      textarea.dispatchEvent(
-        new Event("change", { bubbles: true, cancelable: true })
-      );
-
+      setter.call(textarea, message);
+      textarea.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+      textarea.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
       log(`✅ Mensagem preenchida com sucesso!`);
       log(`📝 Valor da oferta usado: ${offerValue}`);
-
-      // Aguarda um pouco e clica no botão de enviar
       setTimeout(() => {
         clickSendMessageButton();
       }, 800);
-
       return true;
     } catch (e) {
       console.warn("[TM-OLX-Chat-Preciso] Erro ao preencher mensagem", e);
@@ -646,24 +563,12 @@
       log("⚠️ Botão de enviar mensagem não encontrado");
       return false;
     }
-
     try {
-      sendBtn.scrollIntoView({
-        block: "center",
-        inline: "center",
-        behavior: "instant",
-      });
+      sendBtn.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     } catch {}
-
     try {
       ["mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
-        sendBtn.dispatchEvent(
-          new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-          })
-        )
+        sendBtn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
       );
       log("✅ Clique disparado no botão de enviar mensagem!");
       return true;
@@ -673,10 +578,7 @@
         log("✅ Clique via .click() no botão de enviar mensagem!");
         return true;
       } catch (e) {
-        console.warn(
-          "[TM-OLX-Chat-Preciso] Falha ao clicar em enviar mensagem",
-          e
-        );
+        console.warn("[TM-OLX-Chat-Preciso] Falha ao clicar em enviar mensagem", e);
         return false;
       }
     }
@@ -685,39 +587,27 @@
   function setupSendOfferMonitoring() {
     const sendBtn = findSendOfferButton();
     if (!sendBtn) return false;
-
     if (sendOfferClicked.has(sendBtn)) {
       log("Botão 'Enviar oferta' já está sendo monitorado");
       return true;
     }
-
     sendOfferClicked.add(sendBtn);
     log("Monitorando botão 'Enviar oferta'...");
 
-    // Monitora clique no botão "Enviar oferta"
     const handleSendClick = () => {
       log('🎯 Botão "Enviar oferta" foi clicado!');
-
-      // Captura o valor atual do input de oferta
       const offerInput = findOfferInput();
-      const currentValue = offerInput
-        ? offerInput.value
-        : lastOfferValue || loadOfferValue();
-
+      const currentValue = offerInput ? offerInput.value : lastOfferValue || loadOfferValue();
       if (currentValue) {
         lastOfferValue = currentValue;
         log(`💰 Valor capturado da oferta: ${currentValue}`);
       }
-
-      // Aguarda o textarea aparecer e preenche
       setTimeout(() => {
         let attempts = 0;
         const maxAttempts = 15;
-
         const tryFillMessage = setInterval(() => {
           attempts++;
           const textarea = findMessageTextarea();
-
           if (textarea) {
             clearInterval(tryFillMessage);
             fillMessage(textarea, currentValue || "R$ 0,00");
@@ -739,27 +629,89 @@
       log("Observer de 'Enviar oferta' já está ativo");
       return;
     }
-
-    // Tenta imediatamente
     setupSendOfferMonitoring();
-
-    // Observer para detectar quando o botão aparecer
     messageObserver = new MutationObserver(() => {
       setupSendOfferMonitoring();
     });
-    messageObserver.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
+    messageObserver.observe(document.documentElement, { childList: true, subtree: true });
     log("Observador do botão 'Enviar oferta' iniciado");
   }
 
-  // === Fim das funções de mensagem ===
+  // === NOVO: Varredura quando a aba fica ativa ===
+
+  function scheduleQuickSweep(reason = "unknown") {
+    const now = Date.now();
+    if (now - lastSweepAt < SWEEP_DEBOUNCE_MS) return;
+    lastSweepAt = now;
+
+    if (sweepTimeout) clearTimeout(sweepTimeout);
+    sweepTimeout = setTimeout(() => {
+      log(`🔎 Varredura rápida (${reason})`);
+      // tenta clicar no chat, no botão de oferta e configurar input
+      const okChat = tryClick();
+      const okOffer = tryClickOffer();
+      trySetupInput();
+      // Se ainda não abrimos o chat, arma um watchdog para re-tentar
+      if (!chatButtonClicked) armWatchdog("await chat");
+      else clearWatchdog("chat already open");
+    }, 60);
+  }
+
+  function armWatchdog(context) {
+    clearWatchdog();
+    watchdogTimeout = setTimeout(() => {
+      log(`⏰ Watchdog re-tentando (${context})`);
+      scheduleQuickSweep("watchdog");
+    }, WATCHDOG_DELAY_MS);
+  }
+
+  function clearWatchdog(msg) {
+    if (watchdogTimeout) {
+      clearTimeout(watchdogTimeout);
+      watchdogTimeout = null;
+      if (msg) log(`🛑 Watchdog cancelado: ${msg}`);
+    }
+  }
+
+  function hookTabActivation() {
+    // quando a aba volta a ficar visível
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        scheduleQuickSweep("visibilitychange->visible");
+      }
+    });
+
+    // quando a janela ganha foco
+    window.addEventListener("focus", () => {
+      scheduleQuickSweep("window focus");
+    });
+
+    // quando a página é mostrada (ex.: back/forward cache)
+    window.addEventListener("pageshow", (e) => {
+      if (e.persisted || document.visibilityState === "visible") {
+        scheduleQuickSweep("pageshow");
+      }
+    });
+
+    // segurança: se a aba estava sem foco por muito tempo e volta
+    let blurAt = 0;
+    window.addEventListener("blur", () => {
+      blurAt = Date.now();
+    });
+    window.addEventListener("focus", () => {
+      if (blurAt && Date.now() - blurAt > 1500) {
+        scheduleQuickSweep("refocus-after-idle");
+      }
+      blurAt = 0;
+    });
+  }
+
+  // === Navegação SPA ===
 
   function hookSPA() {
     const _push = history.pushState;
     const _replace = history.replaceState;
-    const trigger = () => setTimeout(tryClick, 0);
+    const trigger = () => setTimeout(() => scheduleQuickSweep("spa-nav"), 0);
     history.pushState = function (...args) {
       const r = _push.apply(this, args);
       trigger();
@@ -777,15 +729,12 @@
     log("🚀 Iniciando script OLX Chat Automático...");
     log(`📍 URL atual: ${window.location.href}`);
 
-    // Verifica valor salvo
     const savedValue = localStorage.getItem(STORAGE_KEY);
-    if (savedValue) {
-      log(`💾 Valor encontrado no localStorage: ${savedValue}`);
-    } else {
-      log("💾 Nenhum valor salvo encontrado");
-    }
+    if (savedValue) log(`💾 Valor encontrado no localStorage: ${savedValue}`);
+    else log("💾 Nenhum valor salvo encontrado");
 
     hookSPA();
+    hookTabActivation(); // <=== NOVO
 
     // Tenta configurar input imediatamente caso já esteja visível
     setTimeout(() => {
@@ -798,17 +747,17 @@
         startObserver();
         startPolling();
         tryClick();
+        armWatchdog("domcontentloaded");
       });
     } else {
       startObserver();
       startPolling();
       tryClick();
+      armWatchdog("immediate");
     }
-    window.addEventListener("load", tryClick);
+    window.addEventListener("load", () => scheduleQuickSweep("window load"));
   }
 
-  // Executa a inicialização somente após o carregamento completo da página.
-  // Se já estiver em 'complete', inicia imediatamente; caso contrário, aguarda o evento 'load'.
   if (document.readyState === "complete") {
     init();
   } else {
