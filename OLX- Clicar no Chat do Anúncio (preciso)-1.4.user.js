@@ -76,7 +76,25 @@
   }
 
   function isEnabled(el) {
-    return !el.disabled && !el.getAttribute("aria-disabled");
+    if (!el) return false;
+    // Verifica se está desabilitado
+    if (el.disabled || el.getAttribute("aria-disabled") === "true")
+      return false;
+
+    // Verifica se está em estado de carregamento
+    const isLoading =
+      el.classList.contains("loading") ||
+      el.classList.contains("is-loading") ||
+      el.hasAttribute("data-loading") ||
+      el.getAttribute("aria-busy") === "true" ||
+      // Verifica se há spinner/loader dentro do botão
+      el.querySelector(
+        '[class*="spinner"], [class*="loader"], [class*="loading"], svg[class*="spin"]'
+      ) !== null ||
+      // Verifica se o texto do botão indica carregamento
+      (el.textContent && /carregando|loading/i.test(el.textContent));
+
+    return !isLoading;
   }
 
   function isInPreferredArea(el) {
@@ -114,7 +132,21 @@
 
   function clickButton(btn) {
     if (!btn || clicked.has(btn)) return false;
+
+    // Verifica novamente se está habilitado e não está carregando antes de clicar
+    if (!isEnabled(btn)) {
+      log("Botão não está pronto (desabilitado ou carregando), aguardando...");
+      return false;
+    }
+
+    // Verifica se o botão está realmente visível e pronto
+    if (!isVisible(btn)) {
+      log("Botão não está visível, aguardando...");
+      return false;
+    }
+
     clicked.add(btn);
+
     try {
       // Garante estar visível na tela
       btn.scrollIntoView({
@@ -123,41 +155,51 @@
         behavior: "instant",
       });
     } catch {}
-    try {
-      // Dispara sequência de eventos para simular interação real
-      ["mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
-        btn.dispatchEvent(
-          new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-          })
-        )
-      );
-      log("Clique disparado no botão do anúncio:", btn);
-      chatButtonClicked = true;
-      // Após clicar no chat, inicia observação do botão "Fazer oferta"
-      setTimeout(() => {
-        startOfferObserver();
-        startOfferPolling();
-      }, 500);
-      return true;
-    } catch {
+
+    // Pequeno delay para garantir que o botão terminou qualquer animação de carregamento
+    // e está totalmente interativo
+    setTimeout(() => {
+      // Verifica novamente antes de clicar (pode ter mudado durante o delay)
+      if (!isEnabled(btn) || !isVisible(btn)) {
+        log("Botão não está mais pronto após delay, cancelando clique");
+        return;
+      }
+
       try {
-        btn.click();
-        log("Clique via .click():", btn);
+        // Dispara sequência de eventos para simular interação real
+        ["mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
+          btn.dispatchEvent(
+            new MouseEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+            })
+          )
+        );
+        log("Clique disparado no botão do anúncio:", btn);
         chatButtonClicked = true;
         // Após clicar no chat, inicia observação do botão "Fazer oferta"
         setTimeout(() => {
           startOfferObserver();
           startOfferPolling();
         }, 500);
-        return true;
-      } catch (e) {
-        console.warn("[TM-OLX-Chat-Preciso] Falha ao clicar", e);
-        return false;
+      } catch {
+        try {
+          btn.click();
+          log("Clique via .click():", btn);
+          chatButtonClicked = true;
+          // Após clicar no chat, inicia observação do botão "Fazer oferta"
+          setTimeout(() => {
+            startOfferObserver();
+            startOfferPolling();
+          }, 500);
+        } catch (e) {
+          console.warn("[TM-OLX-Chat-Preciso] Falha ao clicar", e);
+        }
       }
-    }
+    }, 200); // Delay reduzido para 200ms - tempo suficiente para animação mas não muito longo
+
+    return true;
   }
 
   function tryClick() {
@@ -186,7 +228,7 @@
 
   function startPolling() {
     if (pollId) return;
-    pollId = setInterval(tryClick, 600);
+    pollId = setInterval(tryClick, 400); // Intervalo de 400ms - balanceia velocidade e tempo para carregamento
   }
 
   // === Funções para clicar no botão "Fazer oferta" ===
@@ -300,7 +342,7 @@
 
   function startOfferPolling() {
     if (offerPollId) return;
-    offerPollId = setInterval(tryClickOffer, 400);
+    offerPollId = setInterval(tryClickOffer, 200); // Reduzido de 400ms para 200ms
     log("Polling do botão 'Fazer oferta' iniciado");
   }
 
@@ -602,10 +644,78 @@
     return null;
   }
 
+  // Função para encontrar e validar o nome do usuário no chat
+  function findUserName() {
+    try {
+      // Busca pelo span com o nome (comum em PC e mobile)
+      // Padrão: <span class="typo-body-large" title="Nome Completo">Nome Completo</span>
+      const nameSelectors = [
+        "span.typo-body-large[title]",
+        "span[title].typo-body-large",
+        "a.olx-core-link span[title]",
+        "a.olx-core-link span.typo-body-large",
+      ];
+
+      for (const selector of nameSelectors) {
+        const elements = Array.from(document.querySelectorAll(selector));
+        for (const el of elements) {
+          // Prioriza o atributo title, depois o textContent
+          const nameText = (
+            el.getAttribute("title") || el.textContent?.trim()
+          )?.trim();
+          if (nameText) {
+            // Valida o nome: deve ter nome e sobrenome, e o primeiro nome com pelo menos 4 caracteres
+            const nameParts = nameText.split(/\s+/).filter((p) => p.length > 0);
+            if (nameParts.length >= 2 && nameParts[0].length >= 4) {
+              const firstName = nameParts[0];
+              log(
+                `✅ Nome do usuário encontrado e validado: ${firstName} (de: ${nameText})`
+              );
+              return firstName; // Retorna apenas o primeiro nome
+            }
+          }
+        }
+      }
+
+      // Fallback: busca por spans com title que contenham nome completo
+      const spansWithTitle = Array.from(
+        document.querySelectorAll("span[title]")
+      );
+      for (const span of spansWithTitle) {
+        const nameText = span.getAttribute("title")?.trim();
+        if (nameText) {
+          const nameParts = nameText.split(/\s+/).filter((p) => p.length > 0);
+          if (nameParts.length >= 2 && nameParts[0].length >= 4) {
+            // Verifica se não é um texto muito longo (provavelmente não é um nome)
+            if (nameText.length < 50) {
+              const firstName = nameParts[0];
+              log(
+                `✅ Nome do usuário encontrado via fallback: ${firstName} (de: ${nameText})`
+              );
+              return firstName;
+            }
+          }
+        }
+      }
+
+      log(
+        "ℹ️ Nome do usuário não encontrado ou não atende aos critérios (precisa: nome e sobrenome, primeiro nome com ≥4 caracteres)"
+      );
+      return null;
+    } catch (e) {
+      console.warn("[TM-OLX-Chat-Preciso] Erro ao buscar nome do usuário", e);
+      return null;
+    }
+  }
+
   function fillMessage(textarea, offerValue) {
     if (!textarea) return false;
 
-  const message = `Olá, tudo bem? Acabei de enviar uma oferta no valor de ${offerValue}. Sei que é um pouco abaixo do que você está pedindo, mas tenho real interesse na compra. Trabalho com revenda local aqui na minha cidade e pretendo adquirir o produto para revenda. Caso aceite, realizo o pagamento imediatamente para concretizarmos o negócio. Se não for possível, tudo bem, desejo ótimas vendas!`;
+    // Tenta encontrar o nome do usuário
+    const userName = findUserName();
+    const greeting = userName ? `Olá ${userName}, tudo bem?` : `Olá, tudo bem?`;
+
+    const message = `${greeting} Acabei de enviar uma oferta no valor de ${offerValue}. Sei que é um pouco abaixo do que você está pedindo, mas tenho real interesse na compra. Trabalho com revenda local aqui na minha cidade e pretendo adquirir o produto para revenda. Caso aceite, realizo o pagamento imediatamente para concretizarmos o negócio. Se não for possível, tudo bem, desejo ótimas vendas!`;
 
     try {
       textarea.focus();
@@ -793,25 +903,44 @@
       startInputObserver();
     }, 1000);
 
+    // Inicia imediatamente se o DOM já estiver pronto
+    // Isso permite começar a buscar o botão antes de todos os recursos carregarem
     if (document.readyState === "loading") {
+      // Se ainda está carregando, aguarda DOMContentLoaded (mais rápido que 'load')
       document.addEventListener("DOMContentLoaded", () => {
         startObserver();
         startPolling();
-        tryClick();
+        tryClick(); // Tenta imediatamente
       });
     } else {
+      // DOM já está pronto (interactive ou complete)
       startObserver();
       startPolling();
-      tryClick();
+      tryClick(); // Tenta imediatamente
     }
+
+    // Backup: também tenta quando a página estiver completamente carregada
+    // (caso o botão só apareça após alguns recursos carregarem)
     window.addEventListener("load", tryClick);
   }
 
-  // Executa a inicialização somente após o carregamento completo da página.
-  // Se já estiver em 'complete', inicia imediatamente; caso contrário, aguarda o evento 'load'.
-  if (document.readyState === "complete") {
+  // Otimização: Inicia mais cedo usando DOMContentLoaded em vez de 'load'
+  // DOMContentLoaded dispara quando o HTML está parseado, muito antes de todos os recursos
+  if (
+    document.readyState === "complete" ||
+    document.readyState === "interactive"
+  ) {
+    // DOM já está pronto, inicia imediatamente
     init();
   } else {
-    window.addEventListener("load", init);
+    // Aguarda DOMContentLoaded (mais rápido) em vez de 'load'
+    document.addEventListener("DOMContentLoaded", init);
+    // Backup: também escuta 'load' caso DOMContentLoaded já tenha disparado
+    window.addEventListener("load", () => {
+      // Só inicia se ainda não foi iniciado
+      if (!observer && !pollId) {
+        init();
+      }
+    });
   }
 })();
