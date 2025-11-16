@@ -45,9 +45,237 @@
     messageObserver;
   let chatButtonClicked = false;
   let lastOfferValue = null;
+  let essentialLoaded = false; // Flag para indicar que o essencial foi carregado
+  let resourceBlockerActive = false; // Flag para controlar bloqueio de recursos
 
   const STORAGE_KEY = "olx-last-offer-value";
   const log = (...a) => console.log("[TM-OLX-Chat-Preciso]", ...a);
+
+  // === Sistema de otimização de performance ===
+
+  // Verifica se o essencial está carregado (fotos + botão de chat)
+  function checkEssentialLoaded() {
+    if (essentialLoaded) return true;
+
+    // Verifica se há fotos do produto carregadas
+    const hasProductImages =
+      document.querySelector(
+        'img[alt*="produto"], img[alt*="anúncio"], img[src*="image"], [class*="image"], [class*="photo"], [class*="gallery"]'
+      ) !== null || document.querySelectorAll("img").length >= 1; // Pelo menos uma imagem
+
+    // Verifica se o botão de chat está presente (mesmo que ainda não esteja clicável)
+    const hasChatButton =
+      document.querySelector(PRIMARY_SELECTORS.join(", ")) !== null ||
+      document.querySelector(FALLBACK_SELECTORS.join(", ")) !== null;
+
+    // Considera essencial carregado se tiver imagens E botão de chat
+    if (hasProductImages && hasChatButton) {
+      essentialLoaded = true;
+      log("✅ Essencial carregado! Iniciando otimizações de performance...");
+      startResourceBlocking();
+      return true;
+    }
+
+    return false;
+  }
+
+  // Bloqueia recursos desnecessários após o essencial estar carregado
+  // VERSÃO CONSERVADORA: Apenas remove elementos DOM, não bloqueia requisições
+  function startResourceBlocking() {
+    if (resourceBlockerActive) return;
+    resourceBlockerActive = true;
+
+    log("🚫 Iniciando otimizações de performance (modo conservador)...");
+
+    // NOTA: Não bloqueamos fetch/XHR para evitar quebrar a página
+    // Apenas removemos elementos DOM não essenciais e otimizamos imagens
+
+    // 1. Remove elementos não essenciais do DOM (apenas uma vez, de forma segura)
+    try {
+      removeNonEssentialElements();
+    } catch (e) {
+      console.warn("[TM-OLX-Chat-Preciso] Erro ao remover elementos:", e);
+    }
+
+    // 2. Observer para remover elementos que aparecem depois (modo conservador)
+    let cleanupObserver;
+    try {
+      cleanupObserver = new MutationObserver((mutations) => {
+        if (!essentialLoaded) return;
+
+        // Limita processamento para não sobrecarregar
+        let processed = 0;
+        const maxProcess = 10; // Limita a 10 elementos por ciclo
+
+        mutations.forEach((mutation) => {
+          if (processed >= maxProcess) return;
+
+          mutation.addedNodes.forEach((node) => {
+            if (processed >= maxProcess) return;
+
+            if (node.nodeType === 1) {
+              try {
+                removeNonEssentialElement(node);
+                processed++;
+              } catch (e) {
+                // Ignora erros silenciosamente
+              }
+            }
+          });
+        });
+      });
+
+      // Observa apenas mudanças em childList, não em atributos
+      if (document.body || document.documentElement) {
+        cleanupObserver.observe(document.body || document.documentElement, {
+          childList: true,
+          subtree: false, // Apenas filhos diretos para ser mais seguro
+        });
+      }
+    } catch (e) {
+      console.warn("[TM-OLX-Chat-Preciso] Erro ao criar observer:", e);
+    }
+
+    // 3. Otimiza imagens (apenas define lazy loading, não remove)
+    try {
+      const images = document.querySelectorAll("img");
+      images.forEach((img) => {
+        try {
+          // Apenas define lazy loading para imagens não essenciais
+          if (img.src && !isEssentialImage(img)) {
+            img.loading = "lazy";
+          }
+        } catch (e) {
+          // Ignora erros individuais
+        }
+      });
+    } catch (e) {
+      console.warn("[TM-OLX-Chat-Preciso] Erro ao otimizar imagens:", e);
+    }
+
+    log("✅ Otimizações de performance ativadas (modo conservador)");
+  }
+
+  // Verifica se uma imagem é essencial (fotos do produto)
+  function isEssentialImage(img) {
+    const src = img.src || "";
+    const alt = img.alt || "";
+    const parent = img.closest(
+      '[class*="gallery"], [class*="image"], [class*="photo"], [class*="product"]'
+    );
+
+    return (
+      parent !== null ||
+      /produto|anúncio|product|ad|gallery|photo|image/i.test(alt) ||
+      /image|photo|gallery|product|ad/i.test(src) ||
+      img.closest("main, article") !== null
+    );
+  }
+
+  // Remove elementos não essenciais (modo conservador - apenas elementos muito específicos)
+  function removeNonEssentialElements() {
+    // Seletores MUITO específicos de elementos que podem ser removidos com segurança
+    // Apenas elementos que claramente não são essenciais
+    const nonEssentialSelectors = [
+      'iframe[src*="ads"]',
+      'iframe[src*="advertisement"]',
+      '[class*="recommendation"]:not([class*="price"]):not([id*="price"])',
+      '[class*="suggestion"]:not([class*="price"]):not([id*="price"])',
+    ];
+
+    nonEssentialSelectors.forEach((selector) => {
+      try {
+        const elements = document.querySelectorAll(selector);
+        let removed = 0;
+        const maxRemove = 5; // Limita remoções por seletor
+
+        elements.forEach((el) => {
+          if (removed >= maxRemove) return;
+
+          // Verificações de segurança: não remove se estiver em áreas importantes
+          if (
+            !el.closest(
+              'main, article, [id*="price"], [class*="price"], [id*="chat"], [class*="chat"]'
+            ) &&
+            !el.closest("form, button, input, textarea") &&
+            el.offsetHeight > 0 && // Só remove se estiver visível
+            el.offsetWidth > 0
+          ) {
+            try {
+              el.remove();
+              removed++;
+              log(`🗑️ Removido elemento não essencial: ${selector}`);
+            } catch (e) {
+              // Ignora erros de remoção
+            }
+          }
+        });
+      } catch (e) {
+        // Ignora erros silenciosamente
+      }
+    });
+  }
+
+  // Remove um elemento específico se não for essencial (modo muito conservador)
+  function removeNonEssentialElement(node) {
+    if (!node || node.nodeType !== 1) return;
+
+    try {
+      // NÃO remove se estiver em áreas essenciais
+      if (
+        node.closest(
+          'main, article, [id*="price"], [class*="price"], [id*="chat"], [class*="chat"], form, button, input, textarea'
+        )
+      ) {
+        return;
+      }
+
+      // NÃO remove elementos interativos ou importantes
+      const tagName = node.tagName?.toLowerCase();
+      if (
+        [
+          "img",
+          "button",
+          "input",
+          "textarea",
+          "select",
+          "a",
+          "script",
+          "style",
+          "link",
+        ].includes(tagName) ||
+        (node.matches &&
+          node.matches("img, button, input, textarea, a, script, style, link"))
+      ) {
+        return;
+      }
+
+      // Apenas remove elementos muito específicos e claramente não essenciais
+      const className = node.className?.toString() || "";
+      const id = node.id || "";
+      const combined = className + id;
+
+      // Apenas remove se for claramente um iframe de ads ou elemento de recomendação muito específico
+      if (
+        (tagName === "iframe" && /ads|advertisement/i.test(node.src || "")) ||
+        (tagName === "div" &&
+          /recommendation|suggestion/i.test(combined) &&
+          !node.closest("main, article"))
+      ) {
+        // Verificação final de segurança
+        if (
+          node.offsetHeight > 0 &&
+          node.offsetWidth > 0 &&
+          !node.closest("main, article")
+        ) {
+          node.remove();
+          log(`🗑️ Removido elemento não essencial: ${tagName}`);
+        }
+      }
+    } catch (e) {
+      // Ignora todos os erros silenciosamente
+    }
+  }
 
   // Expõe funções globais para debug
   window.OLX_DEBUG = {
@@ -59,6 +287,14 @@
       log(`Valor salvo: ${localStorage.getItem(STORAGE_KEY)}`);
       log(`Chat clicado: ${chatButtonClicked}`);
       log(`URL: ${window.location.href}`);
+      log(`Essencial carregado: ${essentialLoaded}`);
+      log(`Bloqueio de recursos ativo: ${resourceBlockerActive}`);
+    },
+    checkEssential: () => checkEssentialLoaded(),
+    forceBlockResources: () => {
+      essentialLoaded = true;
+      startResourceBlocking();
+      log("✅ Bloqueio de recursos forçado manualmente");
     },
   };
 
@@ -203,6 +439,9 @@
   }
 
   function tryClick() {
+    // Verifica se o essencial está carregado (otimização de performance)
+    checkEssentialLoaded();
+
     const btn = pickButton();
     if (!btn) return false;
 
@@ -956,6 +1195,12 @@
         setTimeout(() => {
           scrollToTop();
         }, 150);
+        // Verifica se o essencial está carregado periodicamente
+        const essentialCheckInterval = setInterval(() => {
+          if (checkEssentialLoaded()) {
+            clearInterval(essentialCheckInterval);
+          }
+        }, 500);
         startObserver();
         startPolling();
         tryClick(); // Tenta imediatamente
@@ -966,6 +1211,12 @@
       setTimeout(() => {
         scrollToTop();
       }, 150);
+      // Verifica se o essencial está carregado periodicamente
+      const essentialCheckInterval = setInterval(() => {
+        if (checkEssentialLoaded()) {
+          clearInterval(essentialCheckInterval);
+        }
+      }, 500);
       startObserver();
       startPolling();
       tryClick(); // Tenta imediatamente
