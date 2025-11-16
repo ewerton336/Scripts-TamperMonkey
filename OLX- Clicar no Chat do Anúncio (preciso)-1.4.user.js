@@ -691,41 +691,156 @@
 
     // Marca como monitorado para evitar duplicação
     if (input.hasAttribute("data-olx-monitored")) {
-      log("Input já está sendo monitorado");
+      log(
+        "Input já está sendo monitorado, verificando se precisa atualizar valor..."
+      );
+      // Mesmo se já estiver monitorado, verifica se o valor precisa ser atualizado
+      const savedValue = loadOfferValue();
+      const currentValue = input.value?.trim() || "";
+
+      // Se o valor salvo é diferente do atual E o atual está vazio ou é o padrão, atualiza
+      if (
+        savedValue &&
+        savedValue !== currentValue &&
+        (currentValue === "" ||
+          currentValue === "R$ 0,00" ||
+          currentValue === "0")
+      ) {
+        log(
+          `Valor salvo (${savedValue}) diferente do atual (${currentValue}), atualizando...`
+        );
+        setTimeout(() => {
+          restoreOfferValue(input);
+        }, 200);
+      }
       return true;
     }
     input.setAttribute("data-olx-monitored", "true");
 
     log("Input de oferta encontrado, configurando...");
 
-    // Aguarda um pouco antes de restaurar (para garantir que o campo está pronto)
-    setTimeout(() => {
-      restoreOfferValue(input);
-    }, 300);
+    // Restaura o valor salvo
+    let restoreAttempts = 0;
+    const maxRestoreAttempts = 3;
+    const tryRestore = () => {
+      restoreAttempts++;
+      const savedValue = loadOfferValue();
+      const currentValue = input.value?.trim() || "";
+
+      if (savedValue) {
+        // Se o valor atual está vazio ou é padrão, restaura o salvo
+        if (
+          currentValue === "" ||
+          currentValue === "R$ 0,00" ||
+          currentValue === "0"
+        ) {
+          log(`Restaurando valor salvo: ${savedValue}`);
+          restoreOfferValue(input);
+        } else if (savedValue !== currentValue) {
+          // Se o valor salvo é diferente, atualiza (usa o mais recente)
+          log(
+            `Valor salvo (${savedValue}) diferente do atual (${currentValue}), atualizando para o salvo...`
+          );
+          restoreOfferValue(input);
+        }
+      }
+
+      // Tenta novamente se necessário (caso o input ainda não esteja totalmente pronto)
+      if (
+        restoreAttempts < maxRestoreAttempts &&
+        (!input.value || input.value === "")
+      ) {
+        setTimeout(tryRestore, 500);
+      }
+    };
+
+    // Tenta restaurar imediatamente e depois com delays
+    tryRestore();
+    setTimeout(tryRestore, 300);
+    setTimeout(tryRestore, 1000);
 
     // Monitora mudanças no input para salvar E capturar valor
     const saveOnChange = (e) => {
-      const value = e.target.value;
-      log(`Valor alterado detectado: ${value}`);
-      if (value && value !== "R$ 0,00" && value.trim() !== "") {
-        saveOfferValue(value);
-        lastOfferValue = value; // Captura para usar na mensagem
+      const value = e.target.value?.trim() || "";
+      if (value && value !== "R$ 0,00" && value !== "" && value !== "0") {
+        const savedValue = loadOfferValue();
+        // Só salva se o valor mudou (evita loops)
+        if (value !== savedValue) {
+          log(
+            `Valor alterado detectado: ${value} (anterior: ${
+              savedValue || "nenhum"
+            })`
+          );
+          saveOfferValue(value);
+          lastOfferValue = value; // Captura para usar na mensagem
+        }
       }
     };
 
     input.addEventListener("change", saveOnChange);
     input.addEventListener("blur", saveOnChange);
+
     // Também salva ao digitar (com debounce via timeout)
     let saveTimeout;
     input.addEventListener("input", (e) => {
       clearTimeout(saveTimeout);
       saveTimeout = setTimeout(() => {
-        const value = e.target.value;
-        if (value && value !== "R$ 0,00" && value.trim() !== "") {
-          saveOfferValue(value);
-          lastOfferValue = value; // Captura para usar na mensagem
+        const value = e.target.value?.trim() || "";
+        if (value && value !== "R$ 0,00" && value !== "" && value !== "0") {
+          const savedValue = loadOfferValue();
+          if (value !== savedValue) {
+            log(`Valor digitado salvo: ${value}`);
+            saveOfferValue(value);
+            lastOfferValue = value; // Captura para usar na mensagem
+          }
         }
       }, 1000); // Salva 1 segundo após parar de digitar
+    });
+
+    // Verifica periodicamente se o valor foi alterado manualmente ou se precisa atualizar
+    let checkInterval = setInterval(() => {
+      if (!input.isConnected) {
+        clearInterval(checkInterval);
+        return;
+      }
+
+      const currentValue = input.value?.trim() || "";
+      const savedValue = loadOfferValue();
+
+      // Se o valor atual é válido e diferente do salvo, atualiza o salvo
+      if (
+        currentValue &&
+        currentValue !== "R$ 0,00" &&
+        currentValue !== "0" &&
+        currentValue !== savedValue
+      ) {
+        log(
+          `Valor atualizado no input (${currentValue}) diferente do salvo (${savedValue}), atualizando...`
+        );
+        saveOfferValue(currentValue);
+        lastOfferValue = currentValue;
+      }
+      // Se o valor salvo existe mas o atual está vazio/padrão, restaura
+      else if (
+        savedValue &&
+        (currentValue === "" ||
+          currentValue === "R$ 0,00" ||
+          currentValue === "0")
+      ) {
+        log(`Valor atual vazio/padrão, restaurando valor salvo: ${savedValue}`);
+        restoreOfferValue(input);
+      }
+    }, 2000); // Verifica a cada 2 segundos
+
+    // Limpa o intervalo quando o input é removido
+    const disconnectObserver = new MutationObserver(() => {
+      if (!input.isConnected) {
+        clearInterval(checkInterval);
+        disconnectObserver.disconnect();
+      }
+    });
+    disconnectObserver.observe(input.parentElement || document.body, {
+      childList: true,
     });
 
     log("Monitoramento do input de oferta configurado");
