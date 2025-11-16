@@ -866,10 +866,48 @@
 
   // === Fim das funções de mensagem ===
 
+  function scrollToTop() {
+    try {
+      // Método 1: window.scrollTo (compatível com PC e mobile)
+      window.scrollTo({
+        top: 0,
+        left: 0,
+        behavior: "instant", // instant para ser mais rápido, sem animação
+      });
+      log("📜 Scroll para o topo executado");
+    } catch (e) {
+      try {
+        // Método 2: Fallback usando scrollTo simples
+        window.scrollTo(0, 0);
+      } catch (e2) {
+        try {
+          // Método 3: Fallback usando documentElement/body
+          if (document.documentElement) {
+            document.documentElement.scrollTop = 0;
+          }
+          if (document.body) {
+            document.body.scrollTop = 0;
+          }
+        } catch (e3) {
+          console.warn(
+            "[TM-OLX-Chat-Preciso] Erro ao fazer scroll para o topo",
+            e3
+          );
+        }
+      }
+    }
+  }
+
   function hookSPA() {
     const _push = history.pushState;
     const _replace = history.replaceState;
-    const trigger = () => setTimeout(tryClick, 0);
+    const trigger = () => {
+      setTimeout(tryClick, 0);
+      // Faz scroll para o topo quando a página muda (SPA)
+      setTimeout(() => {
+        scrollToTop();
+      }, 100);
+    };
     history.pushState = function (...args) {
       const r = _push.apply(this, args);
       trigger();
@@ -897,6 +935,12 @@
 
     hookSPA();
 
+    // Faz scroll para o topo da página após um pequeno delay
+    // Isso garante que as fotos do anúncio fiquem visíveis
+    setTimeout(() => {
+      scrollToTop();
+    }, 100); // Pequeno delay para garantir que o DOM está renderizado
+
     // Tenta configurar input imediatamente caso já esteja visível
     setTimeout(() => {
       trySetupInput();
@@ -908,12 +952,20 @@
     if (document.readyState === "loading") {
       // Se ainda está carregando, aguarda DOMContentLoaded (mais rápido que 'load')
       document.addEventListener("DOMContentLoaded", () => {
+        // Faz scroll para o topo quando o DOM estiver pronto
+        setTimeout(() => {
+          scrollToTop();
+        }, 150);
         startObserver();
         startPolling();
         tryClick(); // Tenta imediatamente
       });
     } else {
       // DOM já está pronto (interactive ou complete)
+      // Faz scroll para o topo
+      setTimeout(() => {
+        scrollToTop();
+      }, 150);
       startObserver();
       startPolling();
       tryClick(); // Tenta imediatamente
@@ -921,7 +973,13 @@
 
     // Backup: também tenta quando a página estiver completamente carregada
     // (caso o botão só apareça após alguns recursos carregarem)
-    window.addEventListener("load", tryClick);
+    window.addEventListener("load", () => {
+      tryClick();
+      // Faz scroll para o topo também quando tudo estiver carregado
+      setTimeout(() => {
+        scrollToTop();
+      }, 200);
+    });
   }
 
   // Otimização: Inicia mais cedo usando DOMContentLoaded em vez de 'load'
