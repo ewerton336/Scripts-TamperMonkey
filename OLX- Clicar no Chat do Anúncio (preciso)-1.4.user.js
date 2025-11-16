@@ -49,7 +49,6 @@
   let resourceBlockerActive = false; // Flag para controlar bloqueio de recursos
 
   const STORAGE_KEY = "olx-last-offer-value";
-  const log = (...a) => console.log("[TM-OLX-Chat-Preciso]", ...a);
 
   // === Sistema de otimização de performance ===
 
@@ -71,7 +70,6 @@
     // Considera essencial carregado se tiver imagens E botão de chat
     if (hasProductImages && hasChatButton) {
       essentialLoaded = true;
-      log("✅ Essencial carregado! Iniciando otimizações de performance...");
       startResourceBlocking();
       return true;
     }
@@ -85,17 +83,13 @@
     if (resourceBlockerActive) return;
     resourceBlockerActive = true;
 
-    log("🚫 Iniciando otimizações de performance (modo conservador)...");
-
     // NOTA: Não bloqueamos fetch/XHR para evitar quebrar a página
     // Apenas removemos elementos DOM não essenciais e otimizamos imagens
 
     // 1. Remove elementos não essenciais do DOM (apenas uma vez, de forma segura)
     try {
       removeNonEssentialElements();
-    } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao remover elementos:", e);
-    }
+    } catch (e) {}
 
     // 2. Observer para remover elementos que aparecem depois (modo conservador)
     let cleanupObserver;
@@ -132,9 +126,7 @@
           subtree: false, // Apenas filhos diretos para ser mais seguro
         });
       }
-    } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao criar observer:", e);
-    }
+    } catch (e) {}
 
     // 3. Otimiza imagens (apenas define lazy loading, não remove)
     try {
@@ -149,11 +141,7 @@
           // Ignora erros individuais
         }
       });
-    } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao otimizar imagens:", e);
-    }
-
-    log("✅ Otimizações de performance ativadas (modo conservador)");
+    } catch (e) {}
   }
 
   // Verifica se uma imagem é essencial (fotos do produto)
@@ -204,7 +192,6 @@
             try {
               el.remove();
               removed++;
-              log(`🗑️ Removido elemento não essencial: ${selector}`);
             } catch (e) {
               // Ignora erros de remoção
             }
@@ -269,7 +256,6 @@
           !node.closest("main, article")
         ) {
           node.remove();
-          log(`🗑️ Removido elemento não essencial: ${tagName}`);
         }
       }
     } catch (e) {
@@ -283,18 +269,12 @@
     setStoredValue: (val) => localStorage.setItem(STORAGE_KEY, val),
     clearStoredValue: () => localStorage.removeItem(STORAGE_KEY),
     logStatus: () => {
-      log("=== STATUS DEBUG ===");
-      log(`Valor salvo: ${localStorage.getItem(STORAGE_KEY)}`);
-      log(`Chat clicado: ${chatButtonClicked}`);
-      log(`URL: ${window.location.href}`);
-      log(`Essencial carregado: ${essentialLoaded}`);
-      log(`Bloqueio de recursos ativo: ${resourceBlockerActive}`);
+      // Função de debug removida
     },
     checkEssential: () => checkEssentialLoaded(),
     forceBlockResources: () => {
       essentialLoaded = true;
       startResourceBlocking();
-      log("✅ Bloqueio de recursos forçado manualmente");
     },
   };
 
@@ -371,13 +351,11 @@
 
     // Verifica novamente se está habilitado e não está carregando antes de clicar
     if (!isEnabled(btn)) {
-      log("Botão não está pronto (desabilitado ou carregando), aguardando...");
       return false;
     }
 
     // Verifica se o botão está realmente visível e pronto
     if (!isVisible(btn)) {
-      log("Botão não está visível, aguardando...");
       return false;
     }
 
@@ -397,7 +375,6 @@
     setTimeout(() => {
       // Verifica novamente antes de clicar (pode ter mudado durante o delay)
       if (!isEnabled(btn) || !isVisible(btn)) {
-        log("Botão não está mais pronto após delay, cancelando clique");
         return;
       }
 
@@ -412,7 +389,6 @@
             })
           )
         );
-        log("Clique disparado no botão do anúncio:", btn);
         chatButtonClicked = true;
         // Após clicar no chat, inicia observação do botão "Fazer oferta"
         setTimeout(() => {
@@ -422,16 +398,13 @@
       } catch {
         try {
           btn.click();
-          log("Clique via .click():", btn);
           chatButtonClicked = true;
           // Após clicar no chat, inicia observação do botão "Fazer oferta"
           setTimeout(() => {
             startOfferObserver();
             startOfferPolling();
           }, 500);
-        } catch (e) {
-          console.warn("[TM-OLX-Chat-Preciso] Falha ao clicar", e);
-        }
+        } catch (e) {}
       }
     }, 200); // Delay reduzido para 200ms - tempo suficiente para animação mas não muito longo
 
@@ -522,7 +495,6 @@
           })
         )
       );
-      log('Clique disparado no botão "Fazer oferta":', btn);
       // Para de observar e polling após clicar
       stopOfferObserver();
       stopOfferPolling();
@@ -534,7 +506,6 @@
     } catch {
       try {
         btn.click();
-        log('Clique via .click() no botão "Fazer oferta":', btn);
         stopOfferObserver();
         stopOfferPolling();
         // Aguarda o formulário de oferta aparecer e configura monitoramento
@@ -543,10 +514,6 @@
         }, 500);
         return true;
       } catch (e) {
-        console.warn(
-          '[TM-OLX-Chat-Preciso] Falha ao clicar em "Fazer oferta"',
-          e
-        );
         return false;
       }
     }
@@ -568,28 +535,24 @@
       childList: true,
       subtree: true,
     });
-    log("Observador do botão 'Fazer oferta' iniciado");
   }
 
   function stopOfferObserver() {
     if (chatObserver) {
       chatObserver.disconnect();
       chatObserver = null;
-      log("Observador do botão 'Fazer oferta' parado");
     }
   }
 
   function startOfferPolling() {
     if (offerPollId) return;
     offerPollId = setInterval(tryClickOffer, 200); // Reduzido de 400ms para 200ms
-    log("Polling do botão 'Fazer oferta' iniciado");
   }
 
   function stopOfferPolling() {
     if (offerPollId) {
       clearInterval(offerPollId);
       offerPollId = null;
-      log("Polling do botão 'Fazer oferta' parado");
     }
   }
 
@@ -611,7 +574,6 @@
       const inputs = Array.from(document.querySelectorAll(selector));
       for (const input of inputs) {
         if (isVisible(input) && input.type === "text") {
-          log(`Input encontrado com seletor: ${selector}`);
           return input;
         }
       }
@@ -626,25 +588,18 @@
       const cleanValue = value.replace(/[^\d]/g, "");
       if (cleanValue && cleanValue !== "0" && cleanValue !== "00") {
         localStorage.setItem(STORAGE_KEY, value);
-        log(`Valor da oferta salvo: ${value}`);
       }
-    } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao salvar valor", e);
-    }
+    } catch (e) {}
   }
 
   function loadOfferValue() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        log(`✅ Valor da oferta recuperado do localStorage: ${saved}`);
         return saved;
       } else {
-        log("ℹ️ Nenhum valor salvo encontrado no localStorage");
       }
-    } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao carregar valor", e);
-    }
+    } catch (e) {}
     return null;
   }
 
@@ -674,10 +629,8 @@
       // Remove foco
       input.blur();
 
-      log(`Valor restaurado no input: ${savedValue}`);
       return true;
     } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao restaurar valor", e);
       return false;
     }
   }
@@ -685,15 +638,11 @@
   function setupInputMonitoring() {
     const input = findOfferInput();
     if (!input) {
-      log("Input de oferta não encontrado ainda");
       return false;
     }
 
     // Marca como monitorado para evitar duplicação
     if (input.hasAttribute("data-olx-monitored")) {
-      log(
-        "Input já está sendo monitorado, verificando se precisa atualizar valor..."
-      );
       // Mesmo se já estiver monitorado, verifica se o valor precisa ser atualizado
       const savedValue = loadOfferValue();
       const currentValue = input.value?.trim() || "";
@@ -706,9 +655,6 @@
           currentValue === "R$ 0,00" ||
           currentValue === "0")
       ) {
-        log(
-          `Valor salvo (${savedValue}) diferente do atual (${currentValue}), atualizando...`
-        );
         setTimeout(() => {
           restoreOfferValue(input);
         }, 200);
@@ -716,8 +662,6 @@
       return true;
     }
     input.setAttribute("data-olx-monitored", "true");
-
-    log("Input de oferta encontrado, configurando...");
 
     // Restaura o valor salvo
     let restoreAttempts = 0;
@@ -734,13 +678,9 @@
           currentValue === "R$ 0,00" ||
           currentValue === "0"
         ) {
-          log(`Restaurando valor salvo: ${savedValue}`);
           restoreOfferValue(input);
         } else if (savedValue !== currentValue) {
           // Se o valor salvo é diferente, atualiza (usa o mais recente)
-          log(
-            `Valor salvo (${savedValue}) diferente do atual (${currentValue}), atualizando para o salvo...`
-          );
           restoreOfferValue(input);
         }
       }
@@ -766,11 +706,6 @@
         const savedValue = loadOfferValue();
         // Só salva se o valor mudou (evita loops)
         if (value !== savedValue) {
-          log(
-            `Valor alterado detectado: ${value} (anterior: ${
-              savedValue || "nenhum"
-            })`
-          );
           saveOfferValue(value);
           lastOfferValue = value; // Captura para usar na mensagem
         }
@@ -789,7 +724,6 @@
         if (value && value !== "R$ 0,00" && value !== "" && value !== "0") {
           const savedValue = loadOfferValue();
           if (value !== savedValue) {
-            log(`Valor digitado salvo: ${value}`);
             saveOfferValue(value);
             lastOfferValue = value; // Captura para usar na mensagem
           }
@@ -814,9 +748,6 @@
         currentValue !== "0" &&
         currentValue !== savedValue
       ) {
-        log(
-          `Valor atualizado no input (${currentValue}) diferente do salvo (${savedValue}), atualizando...`
-        );
         saveOfferValue(currentValue);
         lastOfferValue = currentValue;
       }
@@ -827,7 +758,6 @@
           currentValue === "R$ 0,00" ||
           currentValue === "0")
       ) {
-        log(`Valor atual vazio/padrão, restaurando valor salvo: ${savedValue}`);
         restoreOfferValue(input);
       }
     }, 2000); // Verifica a cada 2 segundos
@@ -843,8 +773,6 @@
       childList: true,
     });
 
-    log("Monitoramento do input de oferta configurado");
-
     // Inicia monitoramento do botão "Enviar oferta"
     startSendOfferObserver();
 
@@ -859,7 +787,6 @@
 
   function startInputObserver() {
     if (inputObserver) {
-      log("Observer de input já está ativo");
       return;
     }
 
@@ -868,23 +795,19 @@
 
     // Tenta imediatamente
     if (trySetupInput()) {
-      log("Input encontrado e configurado imediatamente!");
       return; // Não precisa continuar se já encontrou
     }
 
     // Polling para tentar encontrar o input
     inputPollInterval = setInterval(() => {
       attempts++;
-      log(`Tentativa ${attempts} de encontrar input de oferta...`);
 
       if (trySetupInput()) {
         clearInterval(inputPollInterval);
         inputPollInterval = null;
-        log("Input encontrado e configurado via polling!");
       } else if (attempts >= maxAttempts) {
         clearInterval(inputPollInterval);
         inputPollInterval = null;
-        log("Número máximo de tentativas atingido para encontrar input");
       }
     }, 400);
 
@@ -897,7 +820,6 @@
         if (inputPollInterval) {
           clearInterval(inputPollInterval);
           inputPollInterval = null;
-          log("Input encontrado via observer, polling parado");
         }
       }
     });
@@ -905,7 +827,6 @@
       childList: true,
       subtree: true,
     });
-    log("Observador do input de oferta iniciado");
   }
 
   // === Fim das funções de input ===
@@ -952,7 +873,6 @@
       const textareas = Array.from(document.querySelectorAll(selector));
       for (const textarea of textareas) {
         if (isVisible(textarea)) {
-          log(`Textarea de mensagem encontrado com seletor: ${selector}`);
           return textarea;
         }
       }
@@ -973,7 +893,6 @@
         // Encontrou o path, agora busca o botão pai
         const button = path.closest("button");
         if (button && isVisible(button) && isEnabled(button)) {
-          log("Botão de enviar mensagem encontrado via SVG path");
           return button;
         }
       }
@@ -988,7 +907,6 @@
         for (const btn of buttons) {
           const svg = btn.querySelector("svg");
           if (svg && isVisible(btn) && isEnabled(btn)) {
-            log("Botão de enviar mensagem encontrado via fallback");
             return btn;
           }
         }
@@ -1095,9 +1013,6 @@
               '[class*="status"], [class*="time"], [class*="access"]'
             );
             if (!parent) {
-              log(
-                `✅ Nome do usuário encontrado e validado: ${firstName} (de: ${nameText})`
-              );
               return firstName;
             }
           }
@@ -1123,19 +1038,14 @@
                 .split(/\s+/)
                 .filter((p) => p.length > 0);
               const firstName = nameParts[0];
-              log(
-                `✅ Nome do usuário encontrado via fallback: ${firstName} (de: ${nameText})`
-              );
               return firstName;
             }
           }
         }
       }
 
-      log("ℹ️ Nome do usuário não encontrado ou não atende aos critérios");
       return null;
     } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao buscar nome do usuário", e);
       return null;
     }
   }
@@ -1167,9 +1077,6 @@
         new Event("change", { bubbles: true, cancelable: true })
       );
 
-      log(`✅ Mensagem preenchida com sucesso!`);
-      log(`📝 Valor da oferta usado: ${offerValue}`);
-
       // Aguarda um pouco e clica no botão de enviar
       setTimeout(() => {
         clickSendMessageButton();
@@ -1177,7 +1084,6 @@
 
       return true;
     } catch (e) {
-      console.warn("[TM-OLX-Chat-Preciso] Erro ao preencher mensagem", e);
       return false;
     }
   }
@@ -1185,7 +1091,6 @@
   function clickSendMessageButton() {
     const sendBtn = findSendMessageButton();
     if (!sendBtn) {
-      log("⚠️ Botão de enviar mensagem não encontrado");
       return false;
     }
 
@@ -1207,18 +1112,12 @@
           })
         )
       );
-      log("✅ Clique disparado no botão de enviar mensagem!");
       return true;
     } catch {
       try {
         sendBtn.click();
-        log("✅ Clique via .click() no botão de enviar mensagem!");
         return true;
       } catch (e) {
-        console.warn(
-          "[TM-OLX-Chat-Preciso] Falha ao clicar em enviar mensagem",
-          e
-        );
         return false;
       }
     }
@@ -1229,17 +1128,13 @@
     if (!sendBtn) return false;
 
     if (sendOfferClicked.has(sendBtn)) {
-      log("Botão 'Enviar oferta' já está sendo monitorado");
       return true;
     }
 
     sendOfferClicked.add(sendBtn);
-    log("Monitorando botão 'Enviar oferta'...");
 
     // Monitora clique no botão "Enviar oferta"
     const handleSendClick = () => {
-      log('🎯 Botão "Enviar oferta" foi clicado!');
-
       // Captura o valor atual do input de oferta
       const offerInput = findOfferInput();
       const currentValue = offerInput
@@ -1248,7 +1143,6 @@
 
       if (currentValue) {
         lastOfferValue = currentValue;
-        log(`💰 Valor capturado da oferta: ${currentValue}`);
       }
 
       // Aguarda o textarea aparecer e preenche
@@ -1265,20 +1159,17 @@
             fillMessage(textarea, currentValue || "R$ 0,00");
           } else if (attempts >= maxAttempts) {
             clearInterval(tryFillMessage);
-            log("⚠️ Não foi possível encontrar o textarea de mensagem");
           }
         }, 300);
       }, 500);
     };
 
     sendBtn.addEventListener("click", handleSendClick);
-    log("✅ Listener adicionado ao botão 'Enviar oferta'");
     return true;
   }
 
   function startSendOfferObserver() {
     if (messageObserver) {
-      log("Observer de 'Enviar oferta' já está ativo");
       return;
     }
 
@@ -1293,7 +1184,6 @@
       childList: true,
       subtree: true,
     });
-    log("Observador do botão 'Enviar oferta' iniciado");
   }
 
   // === Fim das funções de mensagem ===
@@ -1306,7 +1196,6 @@
         left: 0,
         behavior: "instant", // instant para ser mais rápido, sem animação
       });
-      log("📜 Scroll para o topo executado");
     } catch (e) {
       try {
         // Método 2: Fallback usando scrollTo simples
@@ -1320,12 +1209,7 @@
           if (document.body) {
             document.body.scrollTop = 0;
           }
-        } catch (e3) {
-          console.warn(
-            "[TM-OLX-Chat-Preciso] Erro ao fazer scroll para o topo",
-            e3
-          );
-        }
+        } catch (e3) {}
       }
     }
   }
@@ -1354,15 +1238,10 @@
   }
 
   function init() {
-    log("🚀 Iniciando script OLX Chat Automático...");
-    log(`📍 URL atual: ${window.location.href}`);
-
     // Verifica valor salvo
     const savedValue = localStorage.getItem(STORAGE_KEY);
     if (savedValue) {
-      log(`💾 Valor encontrado no localStorage: ${savedValue}`);
     } else {
-      log("💾 Nenhum valor salvo encontrado");
     }
 
     hookSPA();
