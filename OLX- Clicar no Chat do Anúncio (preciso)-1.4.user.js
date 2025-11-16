@@ -886,6 +886,74 @@
   // Função para encontrar e validar o nome do usuário no chat
   function findUserName() {
     try {
+      // Palavras que devem ser ignoradas (não são nomes)
+      const ignoreWords = [
+        "Último",
+        "último",
+        "acesso",
+        "online",
+        "offline",
+        "visto",
+        "há",
+        "atrás",
+        "minutos",
+        "horas",
+        "dias",
+        "semana",
+        "mês",
+        "meses",
+        "ver",
+        "perfil",
+        "voltar",
+        "fechar",
+        "chat",
+        "mensagem",
+        "conversa",
+      ];
+
+      // Função para validar se um texto é realmente um nome
+      function isValidName(text) {
+        if (!text || text.length < 2) return false;
+
+        // Ignora textos que contenham palavras de status/tempo
+        const lowerText = text.toLowerCase();
+        if (ignoreWords.some((word) => lowerText.includes(word))) {
+          return false;
+        }
+
+        // Ignora textos que parecem ser datas/horários
+        if (/\d{1,2}:\d{2}/.test(text) || /\d{1,2}\/\d{1,2}/.test(text)) {
+          return false;
+        }
+
+        // Ignora textos muito longos (provavelmente não são nomes)
+        if (text.length > 50) return false;
+
+        const nameParts = text.split(/\s+/).filter((p) => p.length > 0);
+
+        // Se tiver apenas uma palavra, precisa ter pelo menos 4 caracteres
+        if (nameParts.length === 1) {
+          return (
+            nameParts[0].length >= 4 &&
+            !ignoreWords.includes(nameParts[0].toLowerCase())
+          );
+        }
+
+        // Se tiver duas ou mais palavras, valida o primeiro nome
+        if (nameParts.length >= 2) {
+          const firstName = nameParts[0];
+          // Primeiro nome deve ter pelo menos 2 caracteres e não ser uma palavra ignorada
+          return (
+            firstName.length >= 2 &&
+            !ignoreWords.includes(firstName.toLowerCase()) &&
+            // Verifica se não é um texto de status (ex: "Último acesso")
+            !ignoreWords.some((word) => text.toLowerCase().includes(word))
+          );
+        }
+
+        return false;
+      }
+
       // Busca pelo span com o nome (comum em PC e mobile)
       // Padrão: <span class="typo-body-large" title="Nome Completo">Nome Completo</span>
       const nameSelectors = [
@@ -902,31 +970,43 @@
           const nameText = (
             el.getAttribute("title") || el.textContent?.trim()
           )?.trim();
-          if (nameText) {
-            // Valida o nome: deve ter nome e sobrenome, e o primeiro nome com pelo menos 4 caracteres
+
+          if (nameText && isValidName(nameText)) {
             const nameParts = nameText.split(/\s+/).filter((p) => p.length > 0);
-            if (nameParts.length >= 2 && nameParts[0].length >= 4) {
-              const firstName = nameParts[0];
+            const firstName = nameParts[0];
+
+            // Verifica se não está dentro de um contexto de status/tempo
+            const parent = el.closest(
+              '[class*="status"], [class*="time"], [class*="access"]'
+            );
+            if (!parent) {
               log(
                 `✅ Nome do usuário encontrado e validado: ${firstName} (de: ${nameText})`
               );
-              return firstName; // Retorna apenas o primeiro nome
+              return firstName;
             }
           }
         }
       }
 
-      // Fallback: busca por spans com title que contenham nome completo
-      const spansWithTitle = Array.from(
-        document.querySelectorAll("span[title]")
+      // Fallback mais restritivo: busca apenas em áreas específicas do chat
+      const chatHeader = document.querySelector(
+        '[class*="chat"], [id*="chat"], [class*="conversation"]'
       );
-      for (const span of spansWithTitle) {
-        const nameText = span.getAttribute("title")?.trim();
-        if (nameText) {
-          const nameParts = nameText.split(/\s+/).filter((p) => p.length > 0);
-          if (nameParts.length >= 2 && nameParts[0].length >= 4) {
-            // Verifica se não é um texto muito longo (provavelmente não é um nome)
-            if (nameText.length < 50) {
+      if (chatHeader) {
+        const spansWithTitle = Array.from(
+          chatHeader.querySelectorAll("span[title]")
+        );
+        for (const span of spansWithTitle) {
+          const nameText = span.getAttribute("title")?.trim();
+          if (nameText && isValidName(nameText)) {
+            // Verifica se não está próximo a textos de status
+            const nextSibling = span.nextElementSibling;
+            const siblingText = nextSibling?.textContent?.toLowerCase() || "";
+            if (!ignoreWords.some((word) => siblingText.includes(word))) {
+              const nameParts = nameText
+                .split(/\s+/)
+                .filter((p) => p.length > 0);
               const firstName = nameParts[0];
               log(
                 `✅ Nome do usuário encontrado via fallback: ${firstName} (de: ${nameText})`
@@ -937,9 +1017,7 @@
         }
       }
 
-      log(
-        "ℹ️ Nome do usuário não encontrado ou não atende aos critérios (precisa: nome e sobrenome, primeiro nome com ≥4 caracteres)"
-      );
+      log("ℹ️ Nome do usuário não encontrado ou não atende aos critérios");
       return null;
     } catch (e) {
       console.warn("[TM-OLX-Chat-Preciso] Erro ao buscar nome do usuário", e);
